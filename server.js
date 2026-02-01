@@ -59,56 +59,42 @@ function generarNumeroProgramacion() {
 }
 
 // ============================================
-// DATOS MOCK (Temporales)
+// SHAREPOINT SERVICE
 // ============================================
 
-const ticketsMock = [
-  {
-    TICKET: 5932,
-    Referencia: "1610 SXT ST",
-    Material: "NOBUCK",
-    Color: "NEGRO",
-    LOTE: 417,
-    FECHA_DE_ENTREGA: "2025-09-01",
-    ESTADO_TICKET: "NO PIEL / FORROS",
-    ESTADO_SUELA: "TERMINADO",
-    HORMA: "PADE/14793 4.5",
-    PLANT_ARMADO: "PLANT PADE 14793 ALT 4.5 SHAN DOBLE BOTA",
-    CLIENTE: "INVERSIONES STIVALI SAS",
-    tallas: { T34: 0, T35: 0, T36: 2, T37: 2, T38: 2, T39: 3, T40: 0, T41: 0, T42: 0, T43: 0 },
-    PARES: 9
-  },
-  {
-    TICKET: 6222,
-    Referencia: "1871 SXV SU",
-    Material: "SEVILLA",
-    Color: "MIEL",
-    LOTE: 427,
-    FECHA_DE_ENTREGA: "2025-08-23",
-    ESTADO_TICKET: "GUARNICION",
-    ESTADO_SUELA: "TERMINADO",
-    HORMA: "SALMA/41035 2.5",
-    PLANT_ARMADO: "PLANT SALMA 41035 ALT 2.5 SHAN DOBLE ZAPATO",
-    CLIENTE: "SOBREMEDIDAS INV STIVALI",
-    tallas: { T34: 0, T35: 1, T36: 0, T37: 0, T38: 1, T39: 1, T40: 0, T41: 0, T42: 0, T43: 0 },
-    PARES: 3
-  },
-  {
-    TICKET: 6638,
-    Referencia: "2402 SXT ST",
-    Material: "CARNAZA X FOLIA X ANTE",
-    Color: "NEGRO X NEGRO X NEGRO",
-    LOTE: 462,
-    FECHA_DE_ENTREGA: "2025-10-30",
-    ESTADO_TICKET: "MONTAJE",
-    ESTADO_SUELA: "TERMINADO",
-    HORMA: "INCA/E393 4.5",
-    PLANT_ARMADO: "PLANT INCA E393 ALT 4.5 SHAN DOBLE",
-    CLIENTE: "INVERSIONES STIVALI SAS",
-    tallas: { T34: 0, T35: 1, T36: 1, T37: 2, T38: 2, T39: 1, T40: 1, T41: 1, T42: 0, T43: 0 },
-    PARES: 9
+const sharePointService = require('./src/services/sharepoint');
+
+// Cache de tickets
+let ticketsCache = [];
+let lastCacheUpdate = null;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
+
+async function getTickets() {
+  // Si cache es reciente, usarlo
+  if (ticketsCache.length > 0 && lastCacheUpdate && 
+      Date.now() - lastCacheUpdate < CACHE_DURATION) {
+    console.log('📦 Usando tickets cacheados');
+    return ticketsCache;
   }
-];
+
+  // Actualizar cache
+  try {
+    console.log('🔄 Actualizando tickets desde SharePoint...');
+    ticketsCache = await sharePointService.getTicketsWithCache();
+    lastCacheUpdate = Date.now();
+    return ticketsCache;
+  } catch (error) {
+    console.error('❌ Error obteniendo tickets de SharePoint:', error);
+    
+    // Si hay error pero tenemos cache viejo, usarlo
+    if (ticketsCache.length > 0) {
+      console.log('⚠️ Usando cache antiguo por error');
+      return ticketsCache;
+    }
+    
+    throw error;
+  }
+}
 
 // ============================================
 // ENDPOINTS
@@ -128,7 +114,8 @@ app.get('/api/tickets', async (req, res) => {
   try {
     console.log('📥 GET /api/tickets');
 
-    const tickets = ticketsMock;
+    // Obtener tickets de SharePoint (con cache)
+    const tickets = await getTickets();
 
     const { data: plantillas, error } = await supabase
       .from('plantillas_registro')
@@ -148,7 +135,7 @@ app.get('/api/tickets', async (req, res) => {
       console.error('Error obteniendo programaciones:', progError);
     }
 
-    // Enriquecer tickets
+    // Enriquecer tickets (mismo código de antes)
     const ticketsConPlantillas = tickets.map(ticket => {
       const { horma, heel } = parseHormaHeel(ticket.HORMA);
       const plantilla = plantillas?.find(p => p.ticket_id === ticket.TICKET);
@@ -163,12 +150,12 @@ app.get('/api/tickets', async (req, res) => {
           numero_programa: programacion?.numero_programacion || null,
           fecha_programacion: programacion?.fecha_programacion || null,
           fecha_fabricacion: plantilla.fecha_completacion_fabricacion || null,
-          fecha_lista: null, // TODO: agregar campo en BD
+          fecha_lista: null,
           personal_asignado: plantilla.personal_asignado,
           proveedor: plantilla.proveedor,
           observaciones: plantilla.observaciones,
-          tallas_fabricadas: [], // TODO: de tabla tallas_detalle
-          tallas_compradas: []  // TODO: de tabla tallas_detalle
+          tallas_fabricadas: [],
+          tallas_compradas: []
         };
       }
 
@@ -188,7 +175,9 @@ app.get('/api/tickets', async (req, res) => {
       data: ticketsConPlantillas,
       meta: {
         total: ticketsConPlantillas.length,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        cached: lastCacheUpdate ? true : false,
+        cache_age: lastCacheUpdate ? Math.floor((Date.now() - lastCacheUpdate) / 1000) : null
       }
     });
 
@@ -351,6 +340,34 @@ app.post('/api/plantillas', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error al registrar plantilla',
+      error: error.message
+    });
+  }
+});
+
+// POST /api/refresh - Refrescar cache manualmente
+app.post('/api/refresh', async (req, res) => {
+  try {
+    console.log('🔄 Forzando actualización de cache...');
+    
+    ticketsCache = [];
+    lastCacheUpdate = null;
+    
+    const tickets = await getTickets();
+    
+    res.json({
+      success: true,
+      message: 'Cache actualizado',
+      data: {
+        tickets_count: tickets.length,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error refrescando cache:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al refrescar cache',
       error: error.message
     });
   }
