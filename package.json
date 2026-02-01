@@ -7,7 +7,11 @@
     "start": "node server.js",
     "dev": "node server.js"
   },
-  "keywords": ["api", "plantillas", "stivali"],
+  "keywords": [
+    "api",
+    "plantillas",
+    "stivali"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
@@ -15,5 +19,14 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Albernai8a/plantillas-backend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Albernai8a/plantillas-backend/issues"
+  },
+  "homepage": "https://github.com/Albernai8a/plantillas-backend#readme"
 }

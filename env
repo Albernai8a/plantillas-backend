@@ -1,0 +1,5 @@
+PORT=3001
+SUPABASE_URL=https://wnxvovhkgywewzippvge.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndueHZvdmhrZ3l3ZXd6aXBwdmdlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk3Mjg3ODMsImV4cCI6MjA4NTMwNDc4M30.1zq8Gwiv7f7Hl1aQUTlcS4i1f6GyvxngfpJnBpObWtU
+CORS_ORIGIN=http://localhost:5173
+NODE_ENV=development
