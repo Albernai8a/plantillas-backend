@@ -37,14 +37,14 @@ app.use((req, res, next) => {
 // Separar HORMA y HEEL
 function parseHormaHeel(hormaString) {
   if (!hormaString) return { horma: null, heel: null };
-  
+
   const parts = hormaString.split(' ');
   if (parts.length >= 2) {
     const heel = parts[parts.length - 1];
     const horma = parts.slice(0, -1).join(' ');
     return { horma, heel };
   }
-  
+
   return { horma: hormaString, heel: null };
 }
 
@@ -71,8 +71,8 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
 
 async function getTickets() {
   // Si cache es reciente, usarlo
-  if (ticketsCache.length > 0 && lastCacheUpdate && 
-      Date.now() - lastCacheUpdate < CACHE_DURATION) {
+  if (ticketsCache.length > 0 && lastCacheUpdate &&
+    Date.now() - lastCacheUpdate < CACHE_DURATION) {
     console.log('📦 Usando tickets cacheados');
     return ticketsCache;
   }
@@ -85,13 +85,13 @@ async function getTickets() {
     return ticketsCache;
   } catch (error) {
     console.error('❌ Error obteniendo tickets de SharePoint:', error);
-    
+
     // Si hay error pero tenemos cache viejo, usarlo
     if (ticketsCache.length > 0) {
       console.log('⚠️ Usando cache antiguo por error');
       return ticketsCache;
     }
-    
+
     throw error;
   }
 }
@@ -102,10 +102,10 @@ async function getTickets() {
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV 
+    environment: process.env.NODE_ENV
   });
 });
 
@@ -114,9 +114,10 @@ app.get('/api/tickets', async (req, res) => {
   try {
     console.log('📥 GET /api/tickets');
 
-    // Obtener tickets de SharePoint (con cache)
+    // 1. Obtener tickets de SharePoint
     const tickets = await getTickets();
 
+    // 2. Obtener plantillas de Supabase
     const { data: plantillas, error } = await supabase
       .from('plantillas_registro')
       .select('*')
@@ -127,6 +128,7 @@ app.get('/api/tickets', async (req, res) => {
       throw error;
     }
 
+    // 3. Obtener programaciones
     const { data: programaciones, error: progError } = await supabase
       .from('programacion_plantillas')
       .select('*');
@@ -135,12 +137,18 @@ app.get('/api/tickets', async (req, res) => {
       console.error('Error obteniendo programaciones:', progError);
     }
 
-    // Enriquecer tickets (mismo código de antes)
+    // 4. Combinar tickets con plantillas y programaciones
     const ticketsConPlantillas = tickets.map(ticket => {
+      // Separar HORMA y HEEL
       const { horma, heel } = parseHormaHeel(ticket.HORMA);
+
+      // Buscar plantilla para este ticket
       const plantilla = plantillas?.find(p => p.ticket_id === ticket.TICKET);
+
+      // Buscar programación para este ticket
       const programacion = programaciones?.find(p => p.ticket_id === ticket.TICKET);
 
+      // Construir objeto plantilla completo
       let plantillaCompleta = null;
       if (plantilla) {
         plantillaCompleta = {
@@ -150,12 +158,9 @@ app.get('/api/tickets', async (req, res) => {
           numero_programa: programacion?.numero_programacion || null,
           fecha_programacion: programacion?.fecha_programacion || null,
           fecha_fabricacion: plantilla.fecha_completacion_fabricacion || null,
-          fecha_lista: null,
-          personal_asignado: plantilla.personal_asignado,
-          proveedor: plantilla.proveedor,
-          observaciones: plantilla.observaciones,
-          tallas_fabricadas: [],
-          tallas_compradas: []
+          personal_asignado: plantilla.personal_asignado || null,
+          proveedor: plantilla.proveedor || null,
+          observaciones: plantilla.observaciones || null
         };
       }
 
@@ -163,8 +168,11 @@ app.get('/api/tickets', async (req, res) => {
         ...ticket,
         HORMA: horma,
         HEEL: heel,
+        TACON: heel, // Alias para compatibilidad con frontend
         plantilla: plantillaCompleta,
-        tiene_plantilla: !!plantilla
+        tiene_plantilla: !!plantilla,
+        estado_plantilla: plantilla?.estado || 'sin_plantilla',
+        numero_programa: programacion?.numero_programacion || null
       };
     });
 
@@ -175,9 +183,7 @@ app.get('/api/tickets', async (req, res) => {
       data: ticketsConPlantillas,
       meta: {
         total: ticketsConPlantillas.length,
-        timestamp: new Date().toISOString(),
-        cached: lastCacheUpdate ? true : false,
-        cache_age: lastCacheUpdate ? Math.floor((Date.now() - lastCacheUpdate) / 1000) : null
+        timestamp: new Date().toISOString()
       }
     });
 
@@ -197,8 +203,10 @@ app.get('/api/tickets/:id', async (req, res) => {
     const ticketId = parseInt(req.params.id);
     console.log(`📥 GET /api/tickets/${ticketId}`);
 
-    const ticket = ticketsMock.find(t => t.TICKET === ticketId);
-    
+    // Buscar ticket
+    const tickets = await getTickets();
+    const ticket = tickets.find(t => t.TICKET === ticketId);
+
     if (!ticket) {
       return res.status(404).json({
         success: false,
@@ -206,17 +214,25 @@ app.get('/api/tickets/:id', async (req, res) => {
       });
     }
 
+    // Obtener plantilla de Supabase
     const { data: plantilla, error } = await supabase
       .from('plantillas_registro')
       .select('*')
       .eq('ticket_id', ticketId)
       .eq('activo', true)
-      .single();
+      .maybeSingle();
 
     if (error && error.code !== 'PGRST116') {
       console.error('Error obteniendo plantilla:', error);
       throw error;
     }
+
+    // Obtener programación
+    const { data: programacion } = await supabase
+      .from('programacion_plantillas')
+      .select('*')
+      .eq('ticket_id', ticketId)
+      .maybeSingle();
 
     const { horma, heel } = parseHormaHeel(ticket.HORMA);
 
@@ -226,7 +242,9 @@ app.get('/api/tickets/:id', async (req, res) => {
         ...ticket,
         HORMA: horma,
         HEEL: heel,
-        plantilla: plantilla || null
+        TACON: heel,
+        plantilla: plantilla || null,
+        programacion: programacion || null
       }
     });
 
@@ -240,29 +258,38 @@ app.get('/api/tickets/:id', async (req, res) => {
   }
 });
 
-// POST /api/plantillas - Registrar nueva plantilla
+// POST /api/plantillas - Registrar/actualizar plantilla (UNIFICADO Y FLEXIBLE)
 app.post('/api/plantillas', async (req, res) => {
   try {
     console.log('📥 POST /api/plantillas', req.body);
 
-    const { 
-      ticket_id, 
-      tipo, 
+    const {
+      ticket_id,
+      tipo,
+      tipo_plantilla, // Lovable puede enviar esto
+      estado,
       personal_asignado,
       proveedor,
       observaciones,
       tallas_fabricadas,
-      tallas_compradas
+      tallas_compradas,
+      numero_programa,
+      fecha_programacion,
+      accion // 'registrar' | 'programar' | 'fabricada' | 'lista'
     } = req.body;
 
-    if (!ticket_id || !tipo) {
+    // Normalizar tipo (puede venir como "tipo" o "tipo_plantilla")
+    const tipoNormalizado = tipo || tipo_plantilla;
+
+    if (!ticket_id) {
       return res.status(400).json({
         success: false,
-        message: 'Faltan campos requeridos: ticket_id y tipo'
+        message: 'ticket_id es requerido'
       });
     }
 
-    const ticketExiste = ticketsMock.some(t => t.TICKET === ticket_id);
+    const tickets = await getTickets();
+    const ticketExiste = tickets.some(t => t.TICKET === ticket_id);
     if (!ticketExiste) {
       return res.status(404).json({
         success: false,
@@ -270,76 +297,255 @@ app.post('/api/plantillas', async (req, res) => {
       });
     }
 
-    // Insertar plantilla
-    const { data: plantilla, error } = await supabase
+    // Verificar si ya existe una plantilla para este ticket
+    const { data: plantillaExistente, error: checkError } = await supabase
       .from('plantillas_registro')
-      .insert({
-        ticket_id,
-        tipo_plantilla: tipo,
-        estado: 'pendiente',
-        personal_asignado: personal_asignado || null,
-        proveedor: proveedor || null,
-        observaciones: observaciones || null,
-        fecha_registro: new Date().toISOString()
-      })
-      .select()
-      .single();
+      .select('*')
+      .eq('ticket_id', ticket_id)
+      .eq('activo', true)
+      .maybeSingle();
 
-    if (error) {
-      console.error('Error insertando plantilla:', error);
-      throw error;
+    if (checkError && checkError.code !== 'PGRST116') {
+      throw checkError;
     }
 
-    // Si es mixta, insertar detalles de tallas
-    if (tipo === 'mixta' && plantilla.id) {
-      const tallasInsert = [];
-      
-      if (tallas_fabricadas?.length) {
-        tallas_fabricadas.forEach(talla => {
-          tallasInsert.push({
-            plantilla_registro_id: plantilla.id,
-            talla: talla,
-            cantidad: 1, // TODO: obtener de ticket
-            tipo: 'fabricada'
-          });
-        });
-      }
-      
-      if (tallas_compradas?.length) {
-        tallas_compradas.forEach(talla => {
-          tallasInsert.push({
-            plantilla_registro_id: plantilla.id,
-            talla: talla,
-            cantidad: 1, // TODO: obtener de ticket
-            tipo: 'comprada'
-          });
-        });
-      }
+    let plantilla;
+    let programacion;
 
-      if (tallasInsert.length) {
-        const { error: tallasError } = await supabase
-          .from('plantillas_tallas_detalle')
-          .insert(tallasInsert);
+    // AUTO-DETECTAR ACCIÓN si no viene explícita
+    let accionDetectada = accion;
 
-        if (tallasError) {
-          console.error('Error insertando tallas:', tallasError);
+    if (!accionDetectada) {
+      if (!plantillaExistente && tipoNormalizado) {
+        accionDetectada = 'registrar';
+      } else if (plantillaExistente && numero_programa) {
+        accionDetectada = 'programar';
+      }
+    }
+
+    console.log('🎯 Acción detectada:', accionDetectada);
+
+    // CASO 1: Registrar nueva plantilla
+    if (!plantillaExistente && (!accionDetectada || accionDetectada === 'registrar')) {
+      const { data, error } = await supabase
+        .from('plantillas_registro')
+        .insert({
+          ticket_id,
+          tipo_plantilla: tipoNormalizado || 'fabricada',
+          estado: estado || 'pendiente',
+          personal_asignado: personal_asignado || null,
+          proveedor: proveedor || null,
+          observaciones: observaciones || null,
+          fecha_registro: new Date().toISOString()
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('❌ Error insertando plantilla:', error);
+        throw error;
+      }
+      plantilla = data;
+
+      // Si es mixta, insertar detalles de tallas
+      if (tipoNormalizado === 'mixta' && plantilla.id) {
+        const tallasInsert = [];
+
+        if (tallas_fabricadas?.length) {
+          tallas_fabricadas.forEach(talla => {
+            tallasInsert.push({
+              plantilla_registro_id: plantilla.id,
+              talla: talla,
+              cantidad: 1,
+              tipo: 'fabricada'
+            });
+          });
+        }
+
+        if (tallas_compradas?.length) {
+          tallas_compradas.forEach(talla => {
+            tallasInsert.push({
+              plantilla_registro_id: plantilla.id,
+              talla: talla,
+              cantidad: 1,
+              tipo: 'comprada'
+            });
+          });
+        }
+
+        if (tallasInsert.length) {
+          await supabase
+            .from('plantillas_tallas_detalle')
+            .insert(tallasInsert);
         }
       }
+
+      // Si es comprada, marcar directo como lista
+      if (tipoNormalizado === 'comprada') {
+        await supabase
+          .from('plantillas_registro')
+          .update({ estado: 'lista' })
+          .eq('id', plantilla.id);
+
+        plantilla.estado = 'lista';
+      }
+
+      console.log('✅ Plantilla registrada:', plantilla.id);
+
+      return res.status(201).json({
+        success: true,
+        message: 'Plantilla registrada exitosamente',
+        data: { plantilla }
+      });
     }
 
-    console.log('✅ Plantilla creada:', plantilla.id);
+    // CASO 2: Programar plantilla existente
+    if (plantillaExistente && accionDetectada === 'programar') {
+      // Generar número de programa
+      const numeroProg = numero_programa || generarNumeroProgramacion();
 
-    res.status(201).json({
-      success: true,
-      message: 'Plantilla registrada exitosamente',
-      data: plantilla
+      // Crear programación
+      const { data: progData, error: progError } = await supabase
+        .from('programacion_plantillas')
+        .insert({
+          ticket_id,
+          plantilla_registro_id: plantillaExistente.id,
+          numero_programacion: numeroProg,
+          fecha_programacion: fecha_programacion || new Date().toISOString(),
+          operario: personal_asignado || null,
+          estado: 'programada'
+        })
+        .select()
+        .single();
+
+      if (progError) {
+        console.error('❌ Error creando programación:', progError);
+        throw progError;
+      }
+      programacion = progData;
+
+      // Actualizar estado de plantilla
+      const { data: plantillaActualizada, error: updateError } = await supabase
+        .from('plantillas_registro')
+        .update({ estado: 'programada' })
+        .eq('id', plantillaExistente.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('❌ Error actualizando plantilla:', updateError);
+        throw updateError;
+      }
+
+      console.log('✅ Ticket programado:', numeroProg);
+
+      return res.json({
+        success: true,
+        message: 'Ticket programado exitosamente',
+        data: {
+          plantilla: plantillaActualizada,
+          programacion: programacion
+        }
+      });
+    }
+
+    // CASO 3: Marcar como fabricada
+    if (plantillaExistente && accionDetectada === 'fabricada') {
+      const { data, error } = await supabase
+        .from('plantillas_registro')
+        .update({
+          estado: 'completada',
+          fecha_completacion_fabricacion: new Date().toISOString()
+        })
+        .eq('id', plantillaExistente.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Actualizar programación
+      await supabase
+        .from('programacion_plantillas')
+        .update({ estado: 'completada' })
+        .eq('ticket_id', ticket_id);
+
+      console.log('✅ Marcado como fabricada');
+
+      return res.json({
+        success: true,
+        message: 'Plantilla marcada como fabricada',
+        data: { plantilla: data }
+      });
+    }
+
+    // CASO 4: Marcar como lista
+    if (plantillaExistente && accionDetectada === 'lista') {
+      const { data, error } = await supabase
+        .from('plantillas_registro')
+        .update({ estado: 'lista' })
+        .eq('id', plantillaExistente.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      console.log('✅ Marcado como lista');
+
+      return res.json({
+        success: true,
+        message: 'Plantilla marcada como lista',
+        data: { plantilla: data }
+      });
+    }
+
+    // CASO 5: Actualizar plantilla existente (sin acción específica)
+    if (plantillaExistente) {
+      const updates = {};
+
+      if (tipoNormalizado) updates.tipo_plantilla = tipoNormalizado;
+      if (estado) updates.estado = estado;
+      if (personal_asignado !== undefined) updates.personal_asignado = personal_asignado;
+      if (proveedor !== undefined) updates.proveedor = proveedor;
+      if (observaciones !== undefined) updates.observaciones = observaciones;
+
+      const { data, error } = await supabase
+        .from('plantillas_registro')
+        .update(updates)
+        .eq('id', plantillaExistente.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return res.json({
+        success: true,
+        message: 'Plantilla actualizada',
+        data: { plantilla: data }
+      });
+    }
+
+    // Si llegamos aquí, algo raro pasó
+    console.log('⚠️ Caso no manejado:', {
+      plantillaExistente: !!plantillaExistente,
+      accionDetectada,
+      tipoNormalizado
+    });
+
+    return res.status(400).json({
+      success: false,
+      message: 'Acción no válida o datos incompletos',
+      debug: {
+        tiene_plantilla: !!plantillaExistente,
+        accion: accionDetectada,
+        tipo: tipoNormalizado
+      }
     });
 
   } catch (error) {
     console.error('❌ Error en POST /api/plantillas:', error);
     res.status(500).json({
       success: false,
-      message: 'Error al registrar plantilla',
+      message: 'Error al procesar plantilla',
       error: error.message
     });
   }
@@ -349,12 +555,12 @@ app.post('/api/plantillas', async (req, res) => {
 app.post('/api/refresh', async (req, res) => {
   try {
     console.log('🔄 Forzando actualización de cache...');
-    
+
     ticketsCache = [];
     lastCacheUpdate = null;
-    
+
     const tickets = await getTickets();
-    
+
     res.json({
       success: true,
       message: 'Cache actualizado',
@@ -373,7 +579,7 @@ app.post('/api/refresh', async (req, res) => {
   }
 });
 
-// PUT /api/tickets/:id/programar - Programar ticket
+// PUT /api/tickets/:id/programar - Programar ticket (LEGACY - mantener por compatibilidad)
 app.put('/api/tickets/:id/programar', async (req, res) => {
   try {
     const ticketId = parseInt(req.params.id);
@@ -439,7 +645,7 @@ app.put('/api/tickets/:id/programar', async (req, res) => {
   }
 });
 
-// PUT /api/tickets/:id/fabricada - Marcar como fabricada
+// PUT /api/tickets/:id/fabricada - Marcar como fabricada (LEGACY)
 app.put('/api/tickets/:id/fabricada', async (req, res) => {
   try {
     const ticketId = parseInt(req.params.id);
@@ -482,7 +688,7 @@ app.put('/api/tickets/:id/fabricada', async (req, res) => {
   }
 });
 
-// PUT /api/tickets/:id/lista - Marcar como lista
+// PUT /api/tickets/:id/lista - Marcar como lista (LEGACY)
 app.put('/api/tickets/:id/lista', async (req, res) => {
   try {
     const ticketId = parseInt(req.params.id);
@@ -490,9 +696,7 @@ app.put('/api/tickets/:id/lista', async (req, res) => {
 
     const { data, error } = await supabase
       .from('plantillas_registro')
-      .update({
-        estado: 'lista'
-      })
+      .update({ estado: 'lista' })
       .eq('ticket_id', ticketId)
       .eq('activo', true)
       .select()
@@ -518,66 +722,7 @@ app.put('/api/tickets/:id/lista', async (req, res) => {
   }
 });
 
-// GET /api/programas - Listar programas
-app.get('/api/programas', async (req, res) => {
-  try {
-    const { fecha } = req.query;
-    console.log('📥 GET /api/programas', { fecha });
-
-    let query = supabase
-      .from('programacion_plantillas')
-      .select('*')
-      .order('fecha_programacion', { ascending: true });
-
-    if (fecha) {
-      query = query.eq('fecha_programacion', fecha);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-
-    res.json({
-      success: true,
-      data: data
-    });
-
-  } catch (error) {
-    console.error('❌ Error en GET /api/programas:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al obtener programas',
-      error: error.message
-    });
-  }
-});
-
-// POST /api/programas - Crear nuevo programa
-app.post('/api/programas', async (req, res) => {
-  try {
-    const { fecha, operario } = req.body;
-    console.log('📥 POST /api/programas', req.body);
-
-    // TODO: Implementar lógica de creación de programa
-    // Por ahora solo retorna éxito
-
-    res.status(201).json({
-      success: true,
-      message: 'Programa creado',
-      data: { fecha, operario }
-    });
-
-  } catch (error) {
-    console.error('❌ Error en POST /api/programas:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error al crear programa',
-      error: error.message
-    });
-  }
-});
-
-// GET /api/operarios
+// GET /api/operarios - Obtener lista de operarios
 app.get('/api/operarios', async (req, res) => {
   try {
     console.log('📥 GET /api/operarios');
@@ -605,7 +750,7 @@ app.get('/api/operarios', async (req, res) => {
   }
 });
 
-// GET /api/proveedores
+// GET /api/proveedores - Obtener lista de proveedores
 app.get('/api/proveedores', async (req, res) => {
   try {
     console.log('📥 GET /api/proveedores');
@@ -633,7 +778,9 @@ app.get('/api/proveedores', async (req, res) => {
   }
 });
 
-// 404
+// ============================================
+// 404 - Ruta no encontrada
+// ============================================
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -642,7 +789,9 @@ app.use((req, res) => {
   });
 });
 
-// Error handler
+// ============================================
+// ERROR HANDLER
+// ============================================
 app.use((err, req, res, next) => {
   console.error('💥 Error no manejado:', err);
   res.status(500).json({
@@ -652,7 +801,9 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Iniciar servidor
+// ============================================
+// INICIAR SERVIDOR
+// ============================================
 app.listen(PORT, () => {
   console.log('\n🚀 ====================================');
   console.log(`   Servidor corriendo en puerto ${PORT}`);
