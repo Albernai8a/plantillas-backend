@@ -384,7 +384,7 @@ app.post('/api/plantillas', async (req, res) => {
       if (tipoNormalizado === 'comprada') {
         await supabase
           .from('plantillas_registro')
-          .update({ estado: 'lista' })
+          .update({ estado: 'recibida' })  // ← NUEVO
           .eq('id', plantilla.id);
 
         plantilla.estado = 'lista';
