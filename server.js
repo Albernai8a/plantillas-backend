@@ -1,5 +1,6 @@
 // ============================================
-// BACKEND API - PLANTILLAS STIVALI v2.0
+// BACKEND API - PLANTILLAS STIVALI v3.0
+// Con soporte completo para plantillas mixtas
 // ============================================
 
 require('dotenv').config();
@@ -54,8 +55,41 @@ function generarNumeroProgramacion() {
   const year = fecha.getFullYear().toString().slice(-2);
   const month = String(fecha.getMonth() + 1).padStart(2, '0');
   const day = String(fecha.getDate()).padStart(2, '0');
-  const random = Math.floor(Math.random() * 100);
+  const random = Math.floor(Math.random() * 100).toString().padStart(2, '0');
   return `${year}${month}${day}${random}`;
+}
+
+// Calcular estado de plantilla mixta basado en estados de tallas
+async function calcularEstadoMixta(plantillaId) {
+  try {
+    const { data: tallas, error } = await supabase
+      .from('plantillas_tallas_detalle')
+      .select('*')
+      .eq('plantilla_registro_id', plantillaId);
+
+    if (error || !tallas || tallas.length === 0) {
+      console.log('⚠️ No hay tallas para plantilla:', plantillaId);
+      return 'pendiente';
+    }
+
+    const totalTallas = tallas.length;
+    const tallasListas = tallas.filter(t => t.estado === 'lista' || t.estado === 'recibida').length;
+    const tallasPendientes = tallas.filter(t => t.estado === 'pendiente').length;
+
+    console.log(`🔍 Estado mixta ${plantillaId}:`, {
+      total: totalTallas,
+      listas: tallasListas,
+      pendientes: tallasPendientes
+    });
+
+    if (tallasListas === totalTallas) return 'lista';
+    if (tallasPendientes === totalTallas) return 'pendiente';
+    return 'parcial';
+
+  } catch (error) {
+    console.error('❌ Error calculando estado mixta:', error);
+    return 'pendiente';
+  }
 }
 
 // ============================================
@@ -64,20 +98,17 @@ function generarNumeroProgramacion() {
 
 const sharePointService = require('./src/services/sharepoint');
 
-// Cache de tickets
 let ticketsCache = [];
 let lastCacheUpdate = null;
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
+const CACHE_DURATION = 5 * 60 * 1000;
 
 async function getTickets() {
-  // Si cache es reciente, usarlo
   if (ticketsCache.length > 0 && lastCacheUpdate &&
     Date.now() - lastCacheUpdate < CACHE_DURATION) {
     console.log('📦 Usando tickets cacheados');
     return ticketsCache;
   }
 
-  // Actualizar cache
   try {
     console.log('🔄 Actualizando tickets desde SharePoint...');
     ticketsCache = await sharePointService.getTicketsWithCache();
@@ -85,13 +116,10 @@ async function getTickets() {
     return ticketsCache;
   } catch (error) {
     console.error('❌ Error obteniendo tickets de SharePoint:', error);
-
-    // Si hay error pero tenemos cache viejo, usarlo
     if (ticketsCache.length > 0) {
       console.log('⚠️ Usando cache antiguo por error');
       return ticketsCache;
     }
-
     throw error;
   }
 }
@@ -100,7 +128,6 @@ async function getTickets() {
 // ENDPOINTS
 // ============================================
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -109,15 +136,12 @@ app.get('/health', (req, res) => {
   });
 });
 
-// GET /api/tickets - Obtener todos los tickets
 app.get('/api/tickets', async (req, res) => {
   try {
     console.log('📥 GET /api/tickets');
 
-    // 1. Obtener tickets de SharePoint
     const tickets = await getTickets();
 
-    // 2. Obtener plantillas de Supabase
     const { data: plantillas, error } = await supabase
       .from('plantillas_registro')
       .select('*')
@@ -128,7 +152,6 @@ app.get('/api/tickets', async (req, res) => {
       throw error;
     }
 
-    // 3. Obtener programaciones
     const { data: programaciones, error: progError } = await supabase
       .from('programacion_plantillas')
       .select('*');
@@ -137,18 +160,11 @@ app.get('/api/tickets', async (req, res) => {
       console.error('Error obteniendo programaciones:', progError);
     }
 
-    // 4. Combinar tickets con plantillas y programaciones
     const ticketsConPlantillas = tickets.map(ticket => {
-      // Separar HORMA y HEEL
       const { horma, heel } = parseHormaHeel(ticket.HORMA);
-
-      // Buscar plantilla para este ticket
       const plantilla = plantillas?.find(p => p.ticket_id === ticket.TICKET);
-
-      // Buscar programación para este ticket
       const programacion = programaciones?.find(p => p.ticket_id === ticket.TICKET);
 
-      // Construir objeto plantilla completo
       let plantillaCompleta = null;
       if (plantilla) {
         plantillaCompleta = {
@@ -168,7 +184,7 @@ app.get('/api/tickets', async (req, res) => {
         ...ticket,
         HORMA: horma,
         HEEL: heel,
-        TACON: heel, // Alias para compatibilidad con frontend
+        TACON: heel,
         plantilla: plantillaCompleta,
         tiene_plantilla: !!plantilla,
         estado_plantilla: plantilla?.estado || 'sin_plantilla',
@@ -197,13 +213,11 @@ app.get('/api/tickets', async (req, res) => {
   }
 });
 
-// GET /api/tickets/:id - Obtener un ticket específico
 app.get('/api/tickets/:id', async (req, res) => {
   try {
     const ticketId = parseInt(req.params.id);
     console.log(`📥 GET /api/tickets/${ticketId}`);
 
-    // Buscar ticket
     const tickets = await getTickets();
     const ticket = tickets.find(t => t.TICKET === ticketId);
 
@@ -214,7 +228,6 @@ app.get('/api/tickets/:id', async (req, res) => {
       });
     }
 
-    // Obtener plantilla de Supabase
     const { data: plantilla, error } = await supabase
       .from('plantillas_registro')
       .select('*')
@@ -227,7 +240,6 @@ app.get('/api/tickets/:id', async (req, res) => {
       throw error;
     }
 
-    // Obtener programación
     const { data: programacion } = await supabase
       .from('programacion_plantillas')
       .select('*')
@@ -258,7 +270,6 @@ app.get('/api/tickets/:id', async (req, res) => {
   }
 });
 
-// POST /api/plantillas - Registrar/actualizar plantilla (UNIFICADO Y FLEXIBLE)
 app.post('/api/plantillas', async (req, res) => {
   try {
     console.log('📥 POST /api/plantillas');
@@ -268,12 +279,11 @@ app.post('/api/plantillas', async (req, res) => {
     console.log('  accion:', req.body.accion);
     console.log('  tallas_fabricadas:', req.body.tallas_fabricadas);
     console.log('  tallas_compradas:', req.body.tallas_compradas);
-    console.log('  Body completo:', JSON.stringify(req.body, null, 2));
 
     const {
       ticket_id,
       tipo,
-      tipo_plantilla, // Lovable puede enviar esto
+      tipo_plantilla,
       estado,
       personal_asignado,
       proveedor,
@@ -282,10 +292,9 @@ app.post('/api/plantillas', async (req, res) => {
       tallas_compradas,
       numero_programa,
       fecha_programacion,
-      accion // 'registrar' | 'programar' | 'fabricada' | 'lista'
+      accion
     } = req.body;
 
-    // Normalizar tipo (puede venir como "tipo" o "tipo_plantilla")
     const tipoNormalizado = tipo || tipo_plantilla;
 
     if (!ticket_id) {
@@ -304,7 +313,6 @@ app.post('/api/plantillas', async (req, res) => {
       });
     }
 
-    // Verificar si ya existe una plantilla para este ticket
     const { data: plantillaExistente, error: checkError } = await supabase
       .from('plantillas_registro')
       .select('*')
@@ -319,7 +327,6 @@ app.post('/api/plantillas', async (req, res) => {
     let plantilla;
     let programacion;
 
-    // AUTO-DETECTAR ACCIÓN si no viene explícita
     let accionDetectada = accion;
 
     if (!accionDetectada) {
@@ -355,15 +362,8 @@ app.post('/api/plantillas', async (req, res) => {
       plantilla = data;
 
       // Si es mixta, insertar detalles de tallas
-      console.log('🔍 Detectando tipo mixta:', {
-        tipo: tipo,
-        tipoNormalizado: tipoNormalizado,
-        tieneTallasFabricadas: !!tallas_fabricadas?.length,
-        tieneTallasCompradas: !!tallas_compradas?.length,
-        plantillaId: plantilla.id
-      });
-
       if (tipoNormalizado === 'mixta' && plantilla.id) {
+        console.log('🔍 Insertando tallas mixtas');
         const tallasInsert = [];
 
         if (tallas_fabricadas?.length) {
@@ -372,7 +372,8 @@ app.post('/api/plantillas', async (req, res) => {
               plantilla_registro_id: plantilla.id,
               talla: talla,
               cantidad: 1,
-              tipo: 'fabricada'
+              tipo: 'fabricada',
+              estado: 'pendiente'
             });
           });
         }
@@ -383,26 +384,46 @@ app.post('/api/plantillas', async (req, res) => {
               plantilla_registro_id: plantilla.id,
               talla: talla,
               cantidad: 1,
-              tipo: 'comprada'
+              tipo: 'comprada',
+              estado: 'recibida'
             });
           });
         }
 
         if (tallasInsert.length) {
-          await supabase
+          const { error: tallasError } = await supabase
             .from('plantillas_tallas_detalle')
             .insert(tallasInsert);
+
+          if (tallasError) {
+            console.error('❌ Error insertando tallas:', tallasError);
+          } else {
+            console.log('✅ Tallas mixtas insertadas:', tallasInsert.length);
+          }
         }
       }
 
-      // Si es comprada, marcar directo como lista
+      // Si es comprada, marcar directo como recibida
       if (tipoNormalizado === 'comprada') {
         await supabase
           .from('plantillas_registro')
-          .update({ estado: 'recibida' })  // ← NUEVO
+          .update({ estado: 'recibida' })
           .eq('id', plantilla.id);
 
-        plantilla.estado = 'lista';
+        plantilla.estado = 'recibida';
+      }
+
+      // Si es mixta, calcular estado
+      if (tipoNormalizado === 'mixta' && plantilla.id) {
+        const estadoCalculado = await calcularEstadoMixta(plantilla.id);
+        console.log('  Estado calculado mixta:', estadoCalculado);
+
+        await supabase
+          .from('plantillas_registro')
+          .update({ estado: estadoCalculado })
+          .eq('id', plantilla.id);
+
+        plantilla.estado = estadoCalculado;
       }
 
       console.log('✅ Plantilla registrada:', plantilla.id);
@@ -416,10 +437,20 @@ app.post('/api/plantillas', async (req, res) => {
 
     // CASO 2: Programar plantilla existente
     if (plantillaExistente && accionDetectada === 'programar') {
-      // Generar número de programa
       const numeroProg = numero_programa || generarNumeroProgramacion();
 
-      // Crear programación
+      console.log('📅 Programando ticket:', ticket_id, 'Programa:', numeroProg);
+
+      // Si es mixta, solo programar tallas fabricadas
+      if (plantillaExistente.tipo_plantilla === 'mixta') {
+        console.log('  Mixta: Actualizando solo tallas fabricadas');
+        await supabase
+          .from('plantillas_tallas_detalle')
+          .update({ estado: 'programada' })
+          .eq('plantilla_registro_id', plantillaExistente.id)
+          .eq('tipo', 'fabricada');
+      }
+
       const { data: progData, error: progError } = await supabase
         .from('programacion_plantillas')
         .insert({
@@ -439,10 +470,15 @@ app.post('/api/plantillas', async (req, res) => {
       }
       programacion = progData;
 
-      // Actualizar estado de plantilla
+      let nuevoEstado = 'programada';
+      if (plantillaExistente.tipo_plantilla === 'mixta') {
+        nuevoEstado = await calcularEstadoMixta(plantillaExistente.id);
+        console.log('  Nuevo estado mixta:', nuevoEstado);
+      }
+
       const { data: plantillaActualizada, error: updateError } = await supabase
         .from('plantillas_registro')
-        .update({ estado: 'programada' })
+        .update({ estado: nuevoEstado })
         .eq('id', plantillaExistente.id)
         .select()
         .single();
@@ -466,10 +502,28 @@ app.post('/api/plantillas', async (req, res) => {
 
     // CASO 3: Marcar como fabricada
     if (plantillaExistente && accionDetectada === 'fabricada') {
+      console.log('🏭 Marcando como fabricada:', ticket_id);
+
+      // Si es mixta, solo marcar tallas fabricadas
+      if (plantillaExistente.tipo_plantilla === 'mixta') {
+        console.log('  Mixta: Actualizando solo tallas fabricadas');
+        await supabase
+          .from('plantillas_tallas_detalle')
+          .update({ estado: 'completada' })
+          .eq('plantilla_registro_id', plantillaExistente.id)
+          .eq('tipo', 'fabricada');
+      }
+
+      let nuevoEstado = 'completada';
+      if (plantillaExistente.tipo_plantilla === 'mixta') {
+        nuevoEstado = await calcularEstadoMixta(plantillaExistente.id);
+        console.log('  Nuevo estado mixta:', nuevoEstado);
+      }
+
       const { data, error } = await supabase
         .from('plantillas_registro')
         .update({
-          estado: 'completada',
+          estado: nuevoEstado,
           fecha_completacion_fabricacion: new Date().toISOString()
         })
         .eq('id', plantillaExistente.id)
@@ -478,7 +532,6 @@ app.post('/api/plantillas', async (req, res) => {
 
       if (error) throw error;
 
-      // Actualizar programación
       await supabase
         .from('programacion_plantillas')
         .update({ estado: 'completada' })
@@ -495,6 +548,17 @@ app.post('/api/plantillas', async (req, res) => {
 
     // CASO 4: Marcar como lista
     if (plantillaExistente && accionDetectada === 'lista') {
+      console.log('✅ Marcando como lista:', ticket_id);
+
+      // Si es mixta, marcar TODAS las tallas como listas
+      if (plantillaExistente.tipo_plantilla === 'mixta') {
+        console.log('  Mixta: Marcando todas las tallas como listas');
+        await supabase
+          .from('plantillas_tallas_detalle')
+          .update({ estado: 'lista' })
+          .eq('plantilla_registro_id', plantillaExistente.id);
+      }
+
       const { data, error } = await supabase
         .from('plantillas_registro')
         .update({ estado: 'lista' })
@@ -513,7 +577,7 @@ app.post('/api/plantillas', async (req, res) => {
       });
     }
 
-    // CASO 5: Actualizar plantilla existente (sin acción específica)
+    // CASO 5: Actualizar plantilla existente
     if (plantillaExistente) {
       const updates = {};
 
@@ -539,7 +603,6 @@ app.post('/api/plantillas', async (req, res) => {
       });
     }
 
-    // Si llegamos aquí, algo raro pasó
     console.log('⚠️ Caso no manejado:', {
       plantillaExistente: !!plantillaExistente,
       accionDetectada,
@@ -566,7 +629,51 @@ app.post('/api/plantillas', async (req, res) => {
   }
 });
 
-// POST /api/refresh - Refrescar cache manualmente
+app.get('/api/plantillas/:ticketId/tallas', async (req, res) => {
+  try {
+    const ticketId = parseInt(req.params.ticketId);
+    console.log(`📥 GET /api/plantillas/${ticketId}/tallas`);
+
+    const { data: plantilla } = await supabase
+      .from('plantillas_registro')
+      .select('*')
+      .eq('ticket_id', ticketId)
+      .eq('activo', true)
+      .single();
+
+    if (!plantilla) {
+      return res.status(404).json({
+        success: false,
+        message: 'Plantilla no encontrada'
+      });
+    }
+
+    const { data: tallas, error } = await supabase
+      .from('plantillas_tallas_detalle')
+      .select('*')
+      .eq('plantilla_registro_id', plantilla.id)
+      .order('talla');
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: {
+        plantilla: plantilla,
+        tallas: tallas || []
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error en GET /api/plantillas/:ticketId/tallas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener tallas',
+      error: error.message
+    });
+  }
+});
+
 app.post('/api/refresh', async (req, res) => {
   try {
     console.log('🔄 Forzando actualización de cache...');
@@ -594,7 +701,6 @@ app.post('/api/refresh', async (req, res) => {
   }
 });
 
-// PUT /api/tickets/:id/programar - Programar ticket (LEGACY - mantener por compatibilidad)
 app.put('/api/tickets/:id/programar', async (req, res) => {
   try {
     const ticketId = parseInt(req.params.id);
@@ -602,7 +708,6 @@ app.put('/api/tickets/:id/programar', async (req, res) => {
 
     console.log(`📥 PUT /api/tickets/${ticketId}/programar`);
 
-    // Verificar que existe la plantilla
     const { data: plantilla, error: plantillaError } = await supabase
       .from('plantillas_registro')
       .select('*')
@@ -617,10 +722,8 @@ app.put('/api/tickets/:id/programar', async (req, res) => {
       });
     }
 
-    // Generar número de programación
     const numeroProgramacion = generarNumeroProgramacion();
 
-    // Crear programación
     const { data: programacion, error } = await supabase
       .from('programacion_plantillas')
       .insert({
@@ -636,7 +739,6 @@ app.put('/api/tickets/:id/programar', async (req, res) => {
 
     if (error) throw error;
 
-    // Actualizar estado de plantilla
     await supabase
       .from('plantillas_registro')
       .update({ estado: 'programada' })
@@ -660,7 +762,6 @@ app.put('/api/tickets/:id/programar', async (req, res) => {
   }
 });
 
-// PUT /api/tickets/:id/fabricada - Marcar como fabricada (LEGACY)
 app.put('/api/tickets/:id/fabricada', async (req, res) => {
   try {
     const ticketId = parseInt(req.params.id);
@@ -679,7 +780,6 @@ app.put('/api/tickets/:id/fabricada', async (req, res) => {
 
     if (error) throw error;
 
-    // Actualizar programación
     await supabase
       .from('programacion_plantillas')
       .update({ estado: 'completada' })
@@ -703,7 +803,6 @@ app.put('/api/tickets/:id/fabricada', async (req, res) => {
   }
 });
 
-// PUT /api/tickets/:id/lista - Marcar como lista (LEGACY)
 app.put('/api/tickets/:id/lista', async (req, res) => {
   try {
     const ticketId = parseInt(req.params.id);
@@ -737,7 +836,6 @@ app.put('/api/tickets/:id/lista', async (req, res) => {
   }
 });
 
-// GET /api/operarios - Obtener lista de operarios
 app.get('/api/operarios', async (req, res) => {
   try {
     console.log('📥 GET /api/operarios');
@@ -765,7 +863,6 @@ app.get('/api/operarios', async (req, res) => {
   }
 });
 
-// GET /api/proveedores - Obtener lista de proveedores
 app.get('/api/proveedores', async (req, res) => {
   try {
     console.log('📥 GET /api/proveedores');
@@ -793,9 +890,6 @@ app.get('/api/proveedores', async (req, res) => {
   }
 });
 
-// ============================================
-// 404 - Ruta no encontrada
-// ============================================
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -804,9 +898,6 @@ app.use((req, res) => {
   });
 });
 
-// ============================================
-// ERROR HANDLER
-// ============================================
 app.use((err, req, res, next) => {
   console.error('💥 Error no manejado:', err);
   res.status(500).json({
@@ -816,9 +907,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ============================================
-// INICIAR SERVIDOR
-// ============================================
 app.listen(PORT, () => {
   console.log('\n🚀 ====================================');
   console.log(`   Servidor corriendo en puerto ${PORT}`);
