@@ -261,7 +261,14 @@ app.get('/api/tickets/:id', async (req, res) => {
 // POST /api/plantillas - Registrar/actualizar plantilla (UNIFICADO Y FLEXIBLE)
 app.post('/api/plantillas', async (req, res) => {
   try {
-    console.log('📥 POST /api/plantillas', req.body);
+    console.log('📥 POST /api/plantillas');
+    console.log('  ticket_id:', req.body.ticket_id);
+    console.log('  tipo:', req.body.tipo);
+    console.log('  tipo_plantilla:', req.body.tipo_plantilla);
+    console.log('  accion:', req.body.accion);
+    console.log('  tallas_fabricadas:', req.body.tallas_fabricadas);
+    console.log('  tallas_compradas:', req.body.tallas_compradas);
+    console.log('  Body completo:', JSON.stringify(req.body, null, 2));
 
     const {
       ticket_id,
@@ -348,6 +355,14 @@ app.post('/api/plantillas', async (req, res) => {
       plantilla = data;
 
       // Si es mixta, insertar detalles de tallas
+      console.log('🔍 Detectando tipo mixta:', {
+        tipo: tipo,
+        tipoNormalizado: tipoNormalizado,
+        tieneTallasFabricadas: !!tallas_fabricadas?.length,
+        tieneTallasCompradas: !!tallas_compradas?.length,
+        plantillaId: plantilla.id
+      });
+
       if (tipoNormalizado === 'mixta' && plantilla.id) {
         const tallasInsert = [];
 
