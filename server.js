@@ -136,7 +136,7 @@ async function calcularEstadoMixta(plantillaId) {
     const { data: tallas, error } = await supabase
       .from('plantillas_tallas_detalle')
       .select('*')
-      .eq('plantilla_id', plantillaId);
+      .eq('plantilla_registro_id', plantillaId);
 
     if (error || !tallas || tallas.length === 0) {
       console.log('⚠️ No hay tallas para plantilla:', plantillaId);
@@ -171,7 +171,7 @@ async function obtenerCantidadesMixta(plantillaId) {
     const { data: tallas, error } = await supabase
       .from('plantillas_tallas_detalle')
       .select('talla, cantidad, tipo')
-      .eq('plantilla_id', plantillaId);
+      .eq('plantilla_registro_id', plantillaId);
 
     if (error) {
       console.error('❌ Error obteniendo cantidades mixta:', error);
@@ -501,7 +501,7 @@ app.post('/api/plantillas', async (req, res) => {
         if (cantidades_fabricadas && Object.keys(cantidades_fabricadas).length > 0) {
           Object.entries(cantidades_fabricadas).forEach(([talla, cantidad]) => {
             tallasInsert.push({
-              plantilla_id: plantilla.id,
+              plantilla_registro_id: plantilla.id,
               talla: talla,
               cantidad: parseInt(cantidad),
               tipo: 'fabricada',
@@ -511,7 +511,7 @@ app.post('/api/plantillas', async (req, res) => {
         } else if (tallas_fabricadas?.length) {
           tallas_fabricadas.forEach(talla => {
             tallasInsert.push({
-              plantilla_id: plantilla.id,
+              plantilla_registro_id: plantilla.id,
               talla: talla,
               cantidad: 1,
               tipo: 'fabricada',
@@ -523,7 +523,7 @@ app.post('/api/plantillas', async (req, res) => {
         if (cantidades_compradas && Object.keys(cantidades_compradas).length > 0) {
           Object.entries(cantidades_compradas).forEach(([talla, cantidad]) => {
             tallasInsert.push({
-              plantilla_id: plantilla.id,
+              plantilla_registro_id: plantilla.id,
               talla: talla,
               cantidad: parseInt(cantidad),
               tipo: 'comprada',
@@ -533,7 +533,7 @@ app.post('/api/plantillas', async (req, res) => {
         } else if (tallas_compradas?.length) {
           tallas_compradas.forEach(talla => {
             tallasInsert.push({
-              plantilla_id: plantilla.id,
+              plantilla_registro_id: plantilla.id,
               talla: talla,
               cantidad: 1,
               tipo: 'comprada',
@@ -558,7 +558,7 @@ app.post('/api/plantillas', async (req, res) => {
             const { data: verificacion } = await supabase
               .from('plantillas_tallas_detalle')
               .select('*')
-              .eq('plantilla_id', plantilla.id);
+              .eq('plantilla_registro_id', plantilla.id);
             
             console.log('🔍 Tallas guardadas en BD:', verificacion);
           }
@@ -616,7 +616,7 @@ app.post('/api/plantillas', async (req, res) => {
         await supabase
           .from('plantillas_tallas_detalle')
           .update({ estado: 'programada' })
-          .eq('plantilla_id', plantillaExistente.id)
+          .eq('plantilla_registro_id', plantillaExistente.id)
           .eq('tipo', 'fabricada');
       }
 
@@ -678,7 +678,7 @@ app.post('/api/plantillas', async (req, res) => {
         await supabase
           .from('plantillas_tallas_detalle')
           .update({ estado: 'completada' })
-          .eq('plantilla_id', plantillaExistente.id)
+          .eq('plantilla_registro_id', plantillaExistente.id)
           .eq('tipo', 'fabricada');
       }
 
@@ -723,7 +723,7 @@ app.post('/api/plantillas', async (req, res) => {
         await supabase
           .from('plantillas_tallas_detalle')
           .update({ estado: 'lista' })
-          .eq('plantilla_id', plantillaExistente.id);
+          .eq('plantilla_registro_id', plantillaExistente.id);
       }
 
       const { data, error } = await supabase
@@ -878,7 +878,7 @@ app.get('/api/plantillas/:ticketId/tallas', async (req, res) => {
     const { data: tallas, error } = await supabase
       .from('plantillas_tallas_detalle')
       .select('*')
-      .eq('plantilla_id', plantilla.id)
+      .eq('plantilla_registro_id', plantilla.id)
       .order('talla');
 
     if (error) throw error;
