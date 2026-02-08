@@ -624,7 +624,7 @@ app.post('/api/plantillas', async (req, res) => {
         .from('programacion_plantillas')
         .insert({
           ticket_id,
-          plantilla_id: plantillaExistente.id,
+          plantilla_registro_id: plantillaExistente.id,
           numero_programacion: numeroProg,
           fecha_programacion: fecha_programacion || new Date().toISOString(),
           operario: personal_asignado || null,
@@ -955,7 +955,7 @@ app.put('/api/tickets/:id/programar', async (req, res) => {
       .from('programacion_plantillas')
       .insert({
         ticket_id: ticketId,
-        plantilla_id: plantilla.id,
+        plantilla_registro_id: plantilla.id,
         numero_programacion: numeroProgramacion,
         fecha_programacion: fecha_programacion || new Date().toISOString(),
         operario: operario,
