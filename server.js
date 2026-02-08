@@ -1,6 +1,7 @@
 // ============================================
-// BACKEND API - PLANTILLAS STIVALI v4.0
-// Con soporte completo para cantidades en mixtas
+// BACKEND API - PLANTILLAS STIVALI v5.0
+// - Soporte completo para cantidades en mixtas
+// - Sistema de programas activos del día
 // ============================================
 
 require('dotenv').config();
@@ -48,15 +49,88 @@ function parseHormaHeel(hormaString) {
   return { horma: hormaString, heel: null };
 }
 
+// Generar número de programa (primer programa del día)
 function generarNumeroProgramacion() {
   const fecha = new Date();
   const year = fecha.getFullYear().toString().slice(-2);
   const month = String(fecha.getMonth() + 1).padStart(2, '0');
   const day = String(fecha.getDate()).padStart(2, '0');
-  const random = Math.floor(Math.random() * 100).toString().padStart(2, '0');
-  return `${year}${month}${day}${random}`;
+  const consecutivo = '01'; // Siempre empieza en 01
+  return `${year}${month}${day}${consecutivo}`;
 }
 
+// Obtener programa activo del día
+async function obtenerProgramaActivoDelDia() {
+  try {
+    const hoy = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    // Buscar el programa más reciente de hoy
+    const { data, error } = await supabase
+      .from('programacion_plantillas')
+      .select('numero_programacion')
+      .gte('fecha_programacion', hoy)
+      .order('fecha_programacion', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error && error.code !== 'PGRST116') {
+      console.error('Error obteniendo programa activo:', error);
+    }
+
+    // Si hay programa de hoy, usarlo
+    if (data) {
+      console.log('📋 Programa activo del día:', data.numero_programacion);
+      return data.numero_programacion;
+    }
+
+    // Si no hay programa de hoy, generar uno nuevo
+    const nuevoPrograma = generarNumeroProgramacion();
+    console.log('🆕 Creando primer programa del día:', nuevoPrograma);
+    return nuevoPrograma;
+
+  } catch (error) {
+    console.error('❌ Error obteniendo programa activo:', error);
+    return generarNumeroProgramacion();
+  }
+}
+
+// Crear nuevo programa del día
+async function crearNuevoPrograma() {
+  try {
+    const hoy = new Date().toISOString().split('T')[0];
+    
+    // Obtener último programa del día
+    const { data } = await supabase
+      .from('programacion_plantillas')
+      .select('numero_programacion')
+      .gte('fecha_programacion', hoy)
+      .order('numero_programacion', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (data) {
+      // Extraer el consecutivo y sumarle 1
+      const ultimoNum = data.numero_programacion;
+      const base = ultimoNum.slice(0, -2); // YYMMDD
+      const consecutivo = parseInt(ultimoNum.slice(-2)) + 1;
+      const nuevoPrograma = base + consecutivo.toString().padStart(2, '0');
+      
+      console.log('🆕 Nuevo programa creado:', nuevoPrograma);
+      return nuevoPrograma;
+    }
+
+    // Primer programa del día
+    const primerPrograma = generarNumeroProgramacion();
+    console.log('🆕 Primer programa del día:', primerPrograma);
+    return primerPrograma;
+
+  } catch (error) {
+    console.error('❌ Error creando nuevo programa:', error);
+    return generarNumeroProgramacion();
+  }
+}
+
+// Calcular estado de plantilla mixta
 async function calcularEstadoMixta(plantillaId) {
   try {
     const { data: tallas, error } = await supabase
@@ -89,7 +163,7 @@ async function calcularEstadoMixta(plantillaId) {
   }
 }
 
-// NUEVA: Obtener cantidades de plantilla mixta
+// Obtener cantidades de plantilla mixta
 async function obtenerCantidadesMixta(plantillaId) {
   try {
     const { data: tallas, error } = await supabase
@@ -190,7 +264,6 @@ app.get('/api/tickets', async (req, res) => {
       console.error('Error obteniendo programaciones:', progError);
     }
 
-    // Construir tickets con plantillas
     const ticketsConPlantillas = await Promise.all(tickets.map(async ticket => {
       const { horma, heel } = parseHormaHeel(ticket.HORMA);
       const plantilla = plantillas?.find(p => p.ticket_id === ticket.TICKET);
@@ -210,7 +283,6 @@ app.get('/api/tickets', async (req, res) => {
           observaciones: plantilla.observaciones || null
         };
 
-        // Si es mixta, agregar cantidades
         if (plantilla.tipo_plantilla === 'mixta') {
           const { cantidades_fabricadas, cantidades_compradas } = 
             await obtenerCantidadesMixta(plantilla.id);
@@ -288,7 +360,6 @@ app.get('/api/tickets/:id', async (req, res) => {
 
     const { horma, heel } = parseHormaHeel(ticket.HORMA);
 
-    // Si es mixta, obtener cantidades
     let cantidadesMixta = null;
     if (plantilla && plantilla.tipo_plantilla === 'mixta') {
       cantidadesMixta = await obtenerCantidadesMixta(plantilla.id);
@@ -319,7 +390,7 @@ app.get('/api/tickets/:id', async (req, res) => {
   }
 });
 
-// POST /api/plantillas - CON SOPORTE PARA CANTIDADES
+// POST /api/plantillas - CON SOPORTE PARA CANTIDADES Y PROGRAMA ACTIVO
 app.post('/api/plantillas', async (req, res) => {
   try {
     console.log('📥 POST /api/plantillas');
@@ -335,8 +406,8 @@ app.post('/api/plantillas', async (req, res) => {
       observaciones,
       tallas_fabricadas,
       tallas_compradas,
-      cantidades_fabricadas,  // NUEVO
-      cantidades_compradas,   // NUEVO
+      cantidades_fabricadas,
+      cantidades_compradas,
       numero_programa,
       fecha_programacion,
       accion
@@ -413,7 +484,6 @@ app.post('/api/plantillas', async (req, res) => {
         console.log('🔍 Procesando plantilla mixta con cantidades');
         const tallasInsert = [];
 
-        // Usar cantidades_fabricadas si está disponible
         if (cantidades_fabricadas && Object.keys(cantidades_fabricadas).length > 0) {
           Object.entries(cantidades_fabricadas).forEach(([talla, cantidad]) => {
             tallasInsert.push({
@@ -425,7 +495,6 @@ app.post('/api/plantillas', async (req, res) => {
             });
           });
         } else if (tallas_fabricadas?.length) {
-          // Fallback: usar arrays sin cantidades
           tallas_fabricadas.forEach(talla => {
             tallasInsert.push({
               plantilla_registro_id: plantilla.id,
@@ -437,7 +506,6 @@ app.post('/api/plantillas', async (req, res) => {
           });
         }
 
-        // Usar cantidades_compradas si está disponible
         if (cantidades_compradas && Object.keys(cantidades_compradas).length > 0) {
           Object.entries(cantidades_compradas).forEach(([talla, cantidad]) => {
             tallasInsert.push({
@@ -449,7 +517,6 @@ app.post('/api/plantillas', async (req, res) => {
             });
           });
         } else if (tallas_compradas?.length) {
-          // Fallback: usar arrays sin cantidades
           tallas_compradas.forEach(talla => {
             tallasInsert.push({
               plantilla_registro_id: plantilla.id,
@@ -473,7 +540,6 @@ app.post('/api/plantillas', async (req, res) => {
           } else {
             console.log('✅ Tallas mixtas insertadas:', tallasInsert.length);
             
-            // Verificar que se guardaron
             const { data: verificacion } = await supabase
               .from('plantillas_tallas_detalle')
               .select('*')
@@ -484,7 +550,6 @@ app.post('/api/plantillas', async (req, res) => {
         }
       }
 
-      // Si es comprada, marcar directo como recibida
       if (tipoNormalizado === 'comprada') {
         await supabase
           .from('plantillas_registro')
@@ -494,7 +559,6 @@ app.post('/api/plantillas', async (req, res) => {
         plantilla.estado = 'recibida';
       }
 
-      // Si es mixta, calcular estado
       if (tipoNormalizado === 'mixta' && plantilla.id) {
         const estadoCalculado = await calcularEstadoMixta(plantilla.id);
         console.log('  Estado calculado mixta:', estadoCalculado);
@@ -516,13 +580,22 @@ app.post('/api/plantillas', async (req, res) => {
       });
     }
 
-    // CASO 2: Programar plantilla existente
+    // CASO 2: Programar plantilla existente (CON PROGRAMA ACTIVO)
     if (plantillaExistente && accionDetectada === 'programar') {
-      const numeroProg = numero_programa || generarNumeroProgramacion();
+      
+      // Determinar qué número de programa usar
+      let numeroProg;
+      
+      if (numero_programa) {
+        // Usuario especificó un número (cuando hace "Nuevo Programa")
+        numeroProg = numero_programa;
+        console.log('📅 Usando programa especificado:', numeroProg);
+      } else {
+        // Usar programa activo del día
+        numeroProg = await obtenerProgramaActivoDelDia();
+        console.log('📅 Usando programa activo del día:', numeroProg);
+      }
 
-      console.log('📅 Programando ticket:', ticket_id, 'Programa:', numeroProg);
-
-      // Si es mixta, solo programar tallas fabricadas
       if (plantillaExistente.tipo_plantilla === 'mixta') {
         console.log('  Mixta: Actualizando solo tallas fabricadas');
         await supabase
@@ -708,6 +781,66 @@ app.post('/api/plantillas', async (req, res) => {
   }
 });
 
+// GET /api/programas/activo - Obtener programa activo del día
+app.get('/api/programas/activo', async (req, res) => {
+  try {
+    console.log('📋 GET /api/programas/activo');
+
+    const programaActivo = await obtenerProgramaActivoDelDia();
+
+    // Contar cuántos tickets tiene
+    const { data: tickets, error } = await supabase
+      .from('programacion_plantillas')
+      .select('id')
+      .eq('numero_programacion', programaActivo);
+
+    if (error) {
+      console.error('Error contando tickets:', error);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        numero_programa: programaActivo,
+        total_tickets: tickets?.length || 0
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error obteniendo programa activo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener programa activo',
+      error: error.message
+    });
+  }
+});
+
+// POST /api/programas/nuevo - Crear nuevo programa del día
+app.post('/api/programas/nuevo', async (req, res) => {
+  try {
+    console.log('🆕 POST /api/programas/nuevo');
+
+    const nuevoPrograma = await crearNuevoPrograma();
+
+    res.json({
+      success: true,
+      message: 'Nuevo programa creado',
+      data: {
+        numero_programa: nuevoPrograma
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error creando nuevo programa:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al crear programa',
+      error: error.message
+    });
+  }
+});
+
 app.get('/api/plantillas/:ticketId/tallas', async (req, res) => {
   try {
     const ticketId = parseInt(req.params.ticketId);
@@ -801,7 +934,7 @@ app.put('/api/tickets/:id/programar', async (req, res) => {
       });
     }
 
-    const numeroProgramacion = generarNumeroProgramacion();
+    const numeroProgramacion = await obtenerProgramaActivoDelDia();
 
     const { data: programacion, error } = await supabase
       .from('programacion_plantillas')
