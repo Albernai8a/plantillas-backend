@@ -1,6 +1,6 @@
 // ============================================
-// BACKEND API - PLANTILLAS STIVALI v3.0
-// Con soporte completo para plantillas mixtas
+// BACKEND API - PLANTILLAS STIVALI v4.0
+// Con soporte completo para cantidades en mixtas
 // ============================================
 
 require('dotenv').config();
@@ -35,7 +35,6 @@ app.use((req, res, next) => {
 // HELPER FUNCTIONS
 // ============================================
 
-// Separar HORMA y HEEL
 function parseHormaHeel(hormaString) {
   if (!hormaString) return { horma: null, heel: null };
 
@@ -49,7 +48,6 @@ function parseHormaHeel(hormaString) {
   return { horma: hormaString, heel: null };
 }
 
-// Generar número de programa
 function generarNumeroProgramacion() {
   const fecha = new Date();
   const year = fecha.getFullYear().toString().slice(-2);
@@ -59,7 +57,6 @@ function generarNumeroProgramacion() {
   return `${year}${month}${day}${random}`;
 }
 
-// Calcular estado de plantilla mixta basado en estados de tallas
 async function calcularEstadoMixta(plantillaId) {
   try {
     const { data: tallas, error } = await supabase
@@ -89,6 +86,38 @@ async function calcularEstadoMixta(plantillaId) {
   } catch (error) {
     console.error('❌ Error calculando estado mixta:', error);
     return 'pendiente';
+  }
+}
+
+// NUEVA: Obtener cantidades de plantilla mixta
+async function obtenerCantidadesMixta(plantillaId) {
+  try {
+    const { data: tallas, error } = await supabase
+      .from('plantillas_tallas_detalle')
+      .select('talla, cantidad, tipo')
+      .eq('plantilla_registro_id', plantillaId);
+
+    if (error) {
+      console.error('Error obteniendo cantidades mixta:', error);
+      return { cantidades_fabricadas: {}, cantidades_compradas: {} };
+    }
+
+    const cantidades_fabricadas = {};
+    const cantidades_compradas = {};
+
+    tallas?.forEach(row => {
+      if (row.tipo === 'fabricada') {
+        cantidades_fabricadas[row.talla] = row.cantidad;
+      } else if (row.tipo === 'comprada') {
+        cantidades_compradas[row.talla] = row.cantidad;
+      }
+    });
+
+    return { cantidades_fabricadas, cantidades_compradas };
+
+  } catch (error) {
+    console.error('❌ Error obteniendo cantidades mixta:', error);
+    return { cantidades_fabricadas: {}, cantidades_compradas: {} };
   }
 }
 
@@ -136,6 +165,7 @@ app.get('/health', (req, res) => {
   });
 });
 
+// GET /api/tickets - CON CANTIDADES MIXTAS
 app.get('/api/tickets', async (req, res) => {
   try {
     console.log('📥 GET /api/tickets');
@@ -160,7 +190,8 @@ app.get('/api/tickets', async (req, res) => {
       console.error('Error obteniendo programaciones:', progError);
     }
 
-    const ticketsConPlantillas = tickets.map(ticket => {
+    // Construir tickets con plantillas
+    const ticketsConPlantillas = await Promise.all(tickets.map(async ticket => {
       const { horma, heel } = parseHormaHeel(ticket.HORMA);
       const plantilla = plantillas?.find(p => p.ticket_id === ticket.TICKET);
       const programacion = programaciones?.find(p => p.ticket_id === ticket.TICKET);
@@ -178,6 +209,15 @@ app.get('/api/tickets', async (req, res) => {
           proveedor: plantilla.proveedor || null,
           observaciones: plantilla.observaciones || null
         };
+
+        // Si es mixta, agregar cantidades
+        if (plantilla.tipo_plantilla === 'mixta') {
+          const { cantidades_fabricadas, cantidades_compradas } = 
+            await obtenerCantidadesMixta(plantilla.id);
+          
+          plantillaCompleta.cantidades_fabricadas = cantidades_fabricadas;
+          plantillaCompleta.cantidades_compradas = cantidades_compradas;
+        }
       }
 
       return {
@@ -190,7 +230,7 @@ app.get('/api/tickets', async (req, res) => {
         estado_plantilla: plantilla?.estado || 'sin_plantilla',
         numero_programa: programacion?.numero_programacion || null
       };
-    });
+    }));
 
     console.log(`✅ ${ticketsConPlantillas.length} tickets enviados`);
 
@@ -248,6 +288,12 @@ app.get('/api/tickets/:id', async (req, res) => {
 
     const { horma, heel } = parseHormaHeel(ticket.HORMA);
 
+    // Si es mixta, obtener cantidades
+    let cantidadesMixta = null;
+    if (plantilla && plantilla.tipo_plantilla === 'mixta') {
+      cantidadesMixta = await obtenerCantidadesMixta(plantilla.id);
+    }
+
     res.json({
       success: true,
       data: {
@@ -255,7 +301,10 @@ app.get('/api/tickets/:id', async (req, res) => {
         HORMA: horma,
         HEEL: heel,
         TACON: heel,
-        plantilla: plantilla || null,
+        plantilla: plantilla ? {
+          ...plantilla,
+          ...cantidadesMixta
+        } : null,
         programacion: programacion || null
       }
     });
@@ -270,15 +319,11 @@ app.get('/api/tickets/:id', async (req, res) => {
   }
 });
 
+// POST /api/plantillas - CON SOPORTE PARA CANTIDADES
 app.post('/api/plantillas', async (req, res) => {
   try {
     console.log('📥 POST /api/plantillas');
-    console.log('  ticket_id:', req.body.ticket_id);
-    console.log('  tipo:', req.body.tipo);
-    console.log('  tipo_plantilla:', req.body.tipo_plantilla);
-    console.log('  accion:', req.body.accion);
-    console.log('  tallas_fabricadas:', req.body.tallas_fabricadas);
-    console.log('  tallas_compradas:', req.body.tallas_compradas);
+    console.log('  Body:', JSON.stringify(req.body, null, 2));
 
     const {
       ticket_id,
@@ -290,6 +335,8 @@ app.post('/api/plantillas', async (req, res) => {
       observaciones,
       tallas_fabricadas,
       tallas_compradas,
+      cantidades_fabricadas,  // NUEVO
+      cantidades_compradas,   // NUEVO
       numero_programa,
       fecha_programacion,
       accion
@@ -361,12 +408,24 @@ app.post('/api/plantillas', async (req, res) => {
       }
       plantilla = data;
 
-      // Si es mixta, insertar detalles de tallas
+      // Si es mixta, insertar CON CANTIDADES
       if (tipoNormalizado === 'mixta' && plantilla.id) {
-        console.log('🔍 Insertando tallas mixtas');
+        console.log('🔍 Procesando plantilla mixta con cantidades');
         const tallasInsert = [];
 
-        if (tallas_fabricadas?.length) {
+        // Usar cantidades_fabricadas si está disponible
+        if (cantidades_fabricadas && Object.keys(cantidades_fabricadas).length > 0) {
+          Object.entries(cantidades_fabricadas).forEach(([talla, cantidad]) => {
+            tallasInsert.push({
+              plantilla_registro_id: plantilla.id,
+              talla: talla,
+              cantidad: parseInt(cantidad),
+              tipo: 'fabricada',
+              estado: 'pendiente'
+            });
+          });
+        } else if (tallas_fabricadas?.length) {
+          // Fallback: usar arrays sin cantidades
           tallas_fabricadas.forEach(talla => {
             tallasInsert.push({
               plantilla_registro_id: plantilla.id,
@@ -378,7 +437,19 @@ app.post('/api/plantillas', async (req, res) => {
           });
         }
 
-        if (tallas_compradas?.length) {
+        // Usar cantidades_compradas si está disponible
+        if (cantidades_compradas && Object.keys(cantidades_compradas).length > 0) {
+          Object.entries(cantidades_compradas).forEach(([talla, cantidad]) => {
+            tallasInsert.push({
+              plantilla_registro_id: plantilla.id,
+              talla: talla,
+              cantidad: parseInt(cantidad),
+              tipo: 'comprada',
+              estado: 'recibida'
+            });
+          });
+        } else if (tallas_compradas?.length) {
+          // Fallback: usar arrays sin cantidades
           tallas_compradas.forEach(talla => {
             tallasInsert.push({
               plantilla_registro_id: plantilla.id,
@@ -391,6 +462,8 @@ app.post('/api/plantillas', async (req, res) => {
         }
 
         if (tallasInsert.length) {
+          console.log('📋 Insertando tallas:', tallasInsert);
+          
           const { error: tallasError } = await supabase
             .from('plantillas_tallas_detalle')
             .insert(tallasInsert);
@@ -399,6 +472,14 @@ app.post('/api/plantillas', async (req, res) => {
             console.error('❌ Error insertando tallas:', tallasError);
           } else {
             console.log('✅ Tallas mixtas insertadas:', tallasInsert.length);
+            
+            // Verificar que se guardaron
+            const { data: verificacion } = await supabase
+              .from('plantillas_tallas_detalle')
+              .select('*')
+              .eq('plantilla_registro_id', plantilla.id);
+            
+            console.log('🔍 Tallas guardadas en BD:', verificacion);
           }
         }
       }
@@ -504,7 +585,6 @@ app.post('/api/plantillas', async (req, res) => {
     if (plantillaExistente && accionDetectada === 'fabricada') {
       console.log('🏭 Marcando como fabricada:', ticket_id);
 
-      // Si es mixta, solo marcar tallas fabricadas
       if (plantillaExistente.tipo_plantilla === 'mixta') {
         console.log('  Mixta: Actualizando solo tallas fabricadas');
         await supabase
@@ -550,7 +630,6 @@ app.post('/api/plantillas', async (req, res) => {
     if (plantillaExistente && accionDetectada === 'lista') {
       console.log('✅ Marcando como lista:', ticket_id);
 
-      // Si es mixta, marcar TODAS las tallas como listas
       if (plantillaExistente.tipo_plantilla === 'mixta') {
         console.log('  Mixta: Marcando todas las tallas como listas');
         await supabase
