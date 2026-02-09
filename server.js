@@ -63,7 +63,8 @@ function generarNumeroProgramacion() {
 async function obtenerProgramaActivoDelDia() {
   try {
     const hoy = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-
+    
+    // Buscar el programa más reciente de hoy
     const { data, error } = await supabase
       .from('programacion_plantillas')
       .select('numero_programacion')
@@ -76,11 +77,13 @@ async function obtenerProgramaActivoDelDia() {
       console.error('Error obteniendo programa activo:', error);
     }
 
+    // Si hay programa de hoy, usarlo
     if (data) {
       console.log('📋 Programa activo del día:', data.numero_programacion);
       return data.numero_programacion;
     }
 
+    // Si no hay programa de hoy, generar uno nuevo
     const nuevoPrograma = generarNumeroProgramacion();
     console.log('🆕 Creando primer programa del día:', nuevoPrograma);
     return nuevoPrograma;
@@ -95,7 +98,8 @@ async function obtenerProgramaActivoDelDia() {
 async function crearNuevoPrograma() {
   try {
     const hoy = new Date().toISOString().split('T')[0];
-
+    
+    // Obtener último programa del día
     const { data } = await supabase
       .from('programacion_plantillas')
       .select('numero_programacion')
@@ -105,15 +109,17 @@ async function crearNuevoPrograma() {
       .maybeSingle();
 
     if (data) {
+      // Extraer el consecutivo y sumarle 1
       const ultimoNum = data.numero_programacion;
       const base = ultimoNum.slice(0, -2); // YYMMDD
       const consecutivo = parseInt(ultimoNum.slice(-2)) + 1;
       const nuevoPrograma = base + consecutivo.toString().padStart(2, '0');
-
+      
       console.log('🆕 Nuevo programa creado:', nuevoPrograma);
       return nuevoPrograma;
     }
 
+    // Primer programa del día
     const primerPrograma = generarNumeroProgramacion();
     console.log('🆕 Primer programa del día:', primerPrograma);
     return primerPrograma;
@@ -133,7 +139,7 @@ async function calcularEstadoMixta(plantillaId) {
       .eq('plantilla_registro_id', plantillaId);
 
     if (error || !tallas || tallas.length === 0) {
-      console.log('⚠️ No hay tallas para plantilla:', plantillaId, error ? { error } : '');
+      console.log('⚠️ No hay tallas para plantilla:', plantillaId);
       return 'pendiente';
     }
 
@@ -161,7 +167,7 @@ async function calcularEstadoMixta(plantillaId) {
 async function obtenerCantidadesMixta(plantillaId) {
   try {
     console.log('📥 Obteniendo cantidades para plantilla ID:', plantillaId);
-
+    
     const { data: tallas, error } = await supabase
       .from('plantillas_tallas_detalle')
       .select('talla, cantidad, tipo')
@@ -173,7 +179,7 @@ async function obtenerCantidadesMixta(plantillaId) {
     }
 
     console.log('🔍 Tallas encontradas:', tallas?.length || 0);
-
+    
     if (!tallas || tallas.length === 0) {
       console.log('⚠️ No se encontraron tallas para plantilla ID:', plantillaId);
       return { cantidades_fabricadas: {}, cantidades_compradas: {} };
@@ -201,26 +207,6 @@ async function obtenerCantidadesMixta(plantillaId) {
     console.error('❌ Error obteniendo cantidades mixta:', error);
     return { cantidades_fabricadas: {}, cantidades_compradas: {} };
   }
-}
-
-// Inserta solo cantidades > 0 y numéricas.
-function buildDetalleRows({ plantillaId, cantidadesObj, tipo, estadoDefault }) {
-  if (!cantidadesObj || typeof cantidadesObj !== 'object') return [];
-
-  const rows = [];
-  for (const [talla, cantidadRaw] of Object.entries(cantidadesObj)) {
-    const cantidad = Number(cantidadRaw);
-    if (Number.isFinite(cantidad) && cantidad > 0) {
-      rows.push({
-        plantilla_registro_id: plantillaId,
-        talla: String(talla),
-        cantidad: Math.trunc(cantidad),
-        tipo,
-        estado: estadoDefault
-      });
-    }
-  }
-  return rows;
 }
 
 // ============================================
@@ -312,9 +298,9 @@ app.get('/api/tickets', async (req, res) => {
         };
 
         if (plantilla.tipo_plantilla === 'mixta') {
-          const { cantidades_fabricadas, cantidades_compradas } =
+          const { cantidades_fabricadas, cantidades_compradas } = 
             await obtenerCantidadesMixta(plantilla.id);
-
+          
           plantillaCompleta.cantidades_fabricadas = cantidades_fabricadas;
           plantillaCompleta.cantidades_compradas = cantidades_compradas;
         }
@@ -470,6 +456,9 @@ app.post('/api/plantillas', async (req, res) => {
       throw checkError;
     }
 
+    let plantilla;
+    let programacion;
+
     let accionDetectada = accion;
 
     if (!accionDetectada) {
@@ -502,62 +491,60 @@ app.post('/api/plantillas', async (req, res) => {
         console.error('❌ Error insertando plantilla:', error);
         throw error;
       }
-      const plantilla = data;
+      plantilla = data;
 
       // Si es mixta, insertar CON CANTIDADES
       if (tipoNormalizado === 'mixta' && plantilla.id) {
         console.log('🔍 Procesando plantilla mixta con cantidades');
+        const tallasInsert = [];
 
-        let tallasInsert = [];
-
-        // 1) Preferencia: objetos cantidades_*
-        tallasInsert = tallasInsert.concat(
-          buildDetalleRows({
-            plantillaId: plantilla.id,
-            cantidadesObj: cantidades_fabricadas,
-            tipo: 'fabricada',
-            estadoDefault: 'pendiente'
-          })
-        );
-
-        tallasInsert = tallasInsert.concat(
-          buildDetalleRows({
-            plantillaId: plantilla.id,
-            cantidadesObj: cantidades_compradas,
-            tipo: 'comprada',
-            estadoDefault: 'recibida'
-          })
-        );
-
-        // 2) Fallback: arrays tallas_*
-        if (tallasInsert.length === 0) {
-          if (Array.isArray(tallas_fabricadas) && tallas_fabricadas.length) {
-            tallas_fabricadas.forEach(talla => {
-              tallasInsert.push({
-                plantilla_registro_id: plantilla.id,
-                talla: String(talla),
-                cantidad: 1,
-                tipo: 'fabricada',
-                estado: 'pendiente'
-              });
+        if (cantidades_fabricadas && Object.keys(cantidades_fabricadas).length > 0) {
+          Object.entries(cantidades_fabricadas).forEach(([talla, cantidad]) => {
+            tallasInsert.push({
+              plantilla_registro_id: plantilla.id,
+              talla: talla,
+              cantidad: parseInt(cantidad),
+              tipo: 'fabricada',
+              estado: 'pendiente'
             });
-          }
-          if (Array.isArray(tallas_compradas) && tallas_compradas.length) {
-            tallas_compradas.forEach(talla => {
-              tallasInsert.push({
-                plantilla_registro_id: plantilla.id,
-                talla: String(talla),
-                cantidad: 1,
-                tipo: 'comprada',
-                estado: 'recibida'
-              });
+          });
+        } else if (tallas_fabricadas?.length) {
+          tallas_fabricadas.forEach(talla => {
+            tallasInsert.push({
+              plantilla_registro_id: plantilla.id,
+              talla: talla,
+              cantidad: 1,
+              tipo: 'fabricada',
+              estado: 'pendiente'
             });
-          }
+          });
+        }
+
+        if (cantidades_compradas && Object.keys(cantidades_compradas).length > 0) {
+          Object.entries(cantidades_compradas).forEach(([talla, cantidad]) => {
+            tallasInsert.push({
+              plantilla_registro_id: plantilla.id,
+              talla: talla,
+              cantidad: parseInt(cantidad),
+              tipo: 'comprada',
+              estado: 'recibida'
+            });
+          });
+        } else if (tallas_compradas?.length) {
+          tallas_compradas.forEach(talla => {
+            tallasInsert.push({
+              plantilla_registro_id: plantilla.id,
+              talla: talla,
+              cantidad: 1,
+              tipo: 'comprada',
+              estado: 'recibida'
+            });
+          });
         }
 
         if (tallasInsert.length) {
           console.log('📋 Insertando tallas:', tallasInsert);
-
+          
           const { error: tallasError } = await supabase
             .from('plantillas_tallas_detalle')
             .insert(tallasInsert);
@@ -565,47 +552,17 @@ app.post('/api/plantillas', async (req, res) => {
           if (tallasError) {
             console.error('❌ Error insertando tallas:', tallasError);
             console.error('❌ Detalle del error:', JSON.stringify(tallasError, null, 2));
-
-            // Para no dejar "huérfana" una plantilla mixta sin detalle
-            try {
-              await supabase
-                .from('plantillas_registro')
-                .update({ activo: false })
-                .eq('id', plantilla.id);
-              console.log('🧹 Plantilla marcada como inactiva por fallo en detalle:', plantilla.id);
-            } catch (cleanupErr) {
-              console.error('⚠️ No se pudo hacer cleanup de plantilla:', cleanupErr);
-            }
-
-            throw new Error('No se pudieron insertar las tallas en plantillas_tallas_detalle (revisa RLS/policies)');
-          }
-
-          console.log('✅ Tallas mixtas insertadas:', tallasInsert.length);
-
-          const { data: verificacion, error: verifErr } = await supabase
-            .from('plantillas_tallas_detalle')
-            .select('*')
-            .eq('plantilla_registro_id', plantilla.id);
-
-          if (verifErr) {
-            console.error('⚠️ Error verificando tallas guardadas:', verifErr);
           } else {
+            console.log('✅ Tallas mixtas insertadas:', tallasInsert.length);
+            
+            const { data: verificacion } = await supabase
+              .from('plantillas_tallas_detalle')
+              .select('*')
+              .eq('plantilla_registro_id', plantilla.id);
+            
             console.log('🔍 Tallas guardadas en BD:', verificacion);
           }
-        } else {
-          console.log('⚠️ Plantilla mixta sin tallas/cantidades para insertar (tallasInsert vacío)');
         }
-
-        // Estado de la mixta según detalle
-        const estadoCalculado = await calcularEstadoMixta(plantilla.id);
-        console.log('  Estado calculado mixta:', estadoCalculado);
-
-        await supabase
-          .from('plantillas_registro')
-          .update({ estado: estadoCalculado })
-          .eq('id', plantilla.id);
-
-        plantilla.estado = estadoCalculado;
       }
 
       if (tipoNormalizado === 'comprada') {
@@ -615,6 +572,18 @@ app.post('/api/plantillas', async (req, res) => {
           .eq('id', plantilla.id);
 
         plantilla.estado = 'recibida';
+      }
+
+      if (tipoNormalizado === 'mixta' && plantilla.id) {
+        const estadoCalculado = await calcularEstadoMixta(plantilla.id);
+        console.log('  Estado calculado mixta:', estadoCalculado);
+
+        await supabase
+          .from('plantillas_registro')
+          .update({ estado: estadoCalculado })
+          .eq('id', plantilla.id);
+
+        plantilla.estado = estadoCalculado;
       }
 
       console.log('✅ Plantilla registrada:', plantilla.id);
@@ -628,12 +597,16 @@ app.post('/api/plantillas', async (req, res) => {
 
     // CASO 2: Programar plantilla existente (CON PROGRAMA ACTIVO)
     if (plantillaExistente && accionDetectada === 'programar') {
+      
+      // Determinar qué número de programa usar
       let numeroProg;
-
+      
       if (numero_programa) {
+        // Usuario especificó un número (cuando hace "Nuevo Programa")
         numeroProg = numero_programa;
         console.log('📅 Usando programa especificado:', numeroProg);
       } else {
+        // Usar programa activo del día
         numeroProg = await obtenerProgramaActivoDelDia();
         console.log('📅 Usando programa activo del día:', numeroProg);
       }
@@ -654,7 +627,7 @@ app.post('/api/plantillas', async (req, res) => {
           plantilla_registro_id: plantillaExistente.id,
           numero_programacion: numeroProg,
           fecha_programacion: fecha_programacion || new Date().toISOString(),
-          operario: req.body.operario || null,
+          operario: personal_asignado || null,
           estado: 'programada'
         })
         .select()
@@ -664,6 +637,7 @@ app.post('/api/plantillas', async (req, res) => {
         console.error('❌ Error creando programación:', progError);
         throw progError;
       }
+      programacion = progData;
 
       let nuevoEstado = 'programada';
       if (plantillaExistente.tipo_plantilla === 'mixta') {
@@ -690,7 +664,7 @@ app.post('/api/plantillas', async (req, res) => {
         message: 'Ticket programado exitosamente',
         data: {
           plantilla: plantillaActualizada,
-          programacion: progData
+          programacion: programacion
         }
       });
     }
@@ -796,6 +770,12 @@ app.post('/api/plantillas', async (req, res) => {
       });
     }
 
+    console.log('⚠️ Caso no manejado:', {
+      plantillaExistente: !!plantillaExistente,
+      accionDetectada,
+      tipoNormalizado
+    });
+
     return res.status(400).json({
       success: false,
       message: 'Acción no válida o datos incompletos',
@@ -823,6 +803,7 @@ app.get('/api/programas/activo', async (req, res) => {
 
     const programaActivo = await obtenerProgramaActivoDelDia();
 
+    // Contar cuántos tickets tiene
     const { data: tickets, error } = await supabase
       .from('programacion_plantillas')
       .select('id')
@@ -942,6 +923,195 @@ app.post('/api/refresh', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error al refrescar cache',
+      error: error.message
+    });
+  }
+});
+
+app.put('/api/tickets/:id/programar', async (req, res) => {
+  try {
+    const ticketId = parseInt(req.params.id);
+    const { operario, fecha_programacion } = req.body;
+
+    console.log(`📥 PUT /api/tickets/${ticketId}/programar`);
+
+    const { data: plantilla, error: plantillaError } = await supabase
+      .from('plantillas_registro')
+      .select('*')
+      .eq('ticket_id', ticketId)
+      .eq('activo', true)
+      .single();
+
+    if (plantillaError || !plantilla) {
+      return res.status(404).json({
+        success: false,
+        message: 'Primero debe registrar la plantilla'
+      });
+    }
+
+    const numeroProgramacion = await obtenerProgramaActivoDelDia();
+
+    const { data: programacion, error } = await supabase
+      .from('programacion_plantillas')
+      .insert({
+        ticket_id: ticketId,
+        plantilla_registro_id: plantilla.id,
+        numero_programacion: numeroProgramacion,
+        fecha_programacion: fecha_programacion || new Date().toISOString(),
+        operario: operario,
+        estado: 'programada'
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    await supabase
+      .from('plantillas_registro')
+      .update({ estado: 'programada' })
+      .eq('id', plantilla.id);
+
+    console.log('✅ Ticket programado:', numeroProgramacion);
+
+    res.json({
+      success: true,
+      message: 'Ticket programado exitosamente',
+      data: programacion
+    });
+
+  } catch (error) {
+    console.error('❌ Error en PUT /api/tickets/:id/programar:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al programar ticket',
+      error: error.message
+    });
+  }
+});
+
+app.put('/api/tickets/:id/fabricada', async (req, res) => {
+  try {
+    const ticketId = parseInt(req.params.id);
+    console.log(`📥 PUT /api/tickets/${ticketId}/fabricada`);
+
+    const { data, error } = await supabase
+      .from('plantillas_registro')
+      .update({
+        estado: 'completada',
+        fecha_completacion_fabricacion: new Date().toISOString()
+      })
+      .eq('ticket_id', ticketId)
+      .eq('activo', true)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    await supabase
+      .from('programacion_plantillas')
+      .update({ estado: 'completada' })
+      .eq('ticket_id', ticketId);
+
+    console.log('✅ Marcado como fabricada');
+
+    res.json({
+      success: true,
+      message: 'Plantilla marcada como fabricada',
+      data: data
+    });
+
+  } catch (error) {
+    console.error('❌ Error en PUT /api/tickets/:id/fabricada:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al marcar como fabricada',
+      error: error.message
+    });
+  }
+});
+
+app.put('/api/tickets/:id/lista', async (req, res) => {
+  try {
+    const ticketId = parseInt(req.params.id);
+    console.log(`📥 PUT /api/tickets/${ticketId}/lista`);
+
+    const { data, error } = await supabase
+      .from('plantillas_registro')
+      .update({ estado: 'lista' })
+      .eq('ticket_id', ticketId)
+      .eq('activo', true)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    console.log('✅ Marcado como lista');
+
+    res.json({
+      success: true,
+      message: 'Plantilla marcada como lista',
+      data: data
+    });
+
+  } catch (error) {
+    console.error('❌ Error en PUT /api/tickets/:id/lista:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al marcar como lista',
+      error: error.message
+    });
+  }
+});
+
+app.get('/api/operarios', async (req, res) => {
+  try {
+    console.log('📥 GET /api/operarios');
+
+    const { data, error } = await supabase
+      .from('operarios')
+      .select('*')
+      .eq('activo', true)
+      .order('nombre');
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: data
+    });
+
+  } catch (error) {
+    console.error('❌ Error en GET /api/operarios:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener operarios',
+      error: error.message
+    });
+  }
+});
+
+app.get('/api/proveedores', async (req, res) => {
+  try {
+    console.log('📥 GET /api/proveedores');
+
+    const { data, error } = await supabase
+      .from('proveedores')
+      .select('*')
+      .eq('activo', true)
+      .order('nombre');
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: data
+    });
+
+  } catch (error) {
+    console.error('❌ Error en GET /api/proveedores:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al obtener proveedores',
       error: error.message
     });
   }
