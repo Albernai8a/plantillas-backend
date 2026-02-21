@@ -314,8 +314,8 @@ app.get('/api/tickets', async (req, res) => {
       return {
         ...ticket,
         HORMA: horma,
-        HEEL: heel,
-        TACON: heel,
+        HEEL: ticket.HEEL,
+        TACON: ticket.HEEL,
         plantilla: plantillaCompleta,
         tiene_plantilla: !!plantilla,
         estado_plantilla: plantilla?.estado || 'sin_plantilla',
@@ -389,8 +389,8 @@ app.get('/api/tickets/:id', async (req, res) => {
       data: {
         ...ticket,
         HORMA: horma,
-        HEEL: heel,
-        TACON: heel,
+        HEEL: ticket.HEEL,
+        TACON: ticket.HEEL,
         plantilla: plantilla ? {
           ...plantilla,
           ...cantidadesMixta
