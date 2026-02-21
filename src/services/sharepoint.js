@@ -41,8 +41,12 @@ class SharePointService {
       });
 
       // 4. Procesar Excel con ExcelJS
+      //    Pre-procesar el buffer para eliminar nodos dateGroupItem que ExcelJS no soporta
+      //    (aparecen cuando el Excel tiene AutoFiltros de fecha activos)
+      const cleanBuffer = await this._stripDateGroupItems(response.data);
+
       const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.load(response.data);
+      await workbook.xlsx.load(cleanBuffer);
 
       // 5. Obtener la hoja "produccion"
       const worksheet = workbook.getWorksheet('produccion');
@@ -61,6 +65,30 @@ class SharePointService {
     } catch (error) {
       console.error('❌ Error leyendo SharePoint:', error);
       throw error;
+    }
+  }
+
+  async _stripDateGroupItems(buffer) {
+    try {
+      const JSZip = require('jszip');
+      const zip = await JSZip.loadAsync(buffer);
+
+      // Limpiar todos los XMLs de hojas del xlsx
+      const sheetFiles = Object.keys(zip.files).filter(
+        name => name.startsWith('xl/worksheets/') && name.endsWith('.xml')
+      );
+
+      for (const filename of sheetFiles) {
+        let content = await zip.files[filename].async('string');
+        // Eliminar los nodos dateGroupItem (AutoFiltros de fecha) que ExcelJS no soporta
+        content = content.replace(/<dateGroupItem[^>]*\/>/g, '');
+        zip.file(filename, content);
+      }
+
+      return zip.generateAsync({ type: 'arraybuffer' });
+    } catch (err) {
+      console.warn('⚠️ No se pudo limpiar dateGroupItem, usando buffer original:', err.message);
+      return buffer;
     }
   }
 
