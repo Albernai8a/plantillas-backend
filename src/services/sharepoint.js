@@ -65,40 +65,22 @@ class SharePointService {
   }
 
   parseExcelData(worksheet) {
-    // Leer encabezados desde la FILA 2
+    const FECHA_FINIZAJE_COL = 'FECHA RECIBIDO FINIZAJE';
+
+    // Leer encabezados desde la FILA 2 (incluye celdas vacías para mantener índices correctos)
     const headers = [];
     const headerRow = worksheet.getRow(2);
-    
-    headerRow.eachCell((cell, colNumber) => {
-      headers.push(cell.value);
+
+    headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      const val = cell.value;
+      headers[colNumber - 1] = val ? String(val).trim() : null;
     });
 
-    // Crear mapa de índices de columnas
-    const columnIndexes = {
-      TICKET: headers.indexOf('TICKET'),
-      Referencia: headers.indexOf('Referencia'),
-      Material: headers.indexOf('Material'),
-      Color: headers.indexOf('Color'),
-      LOTE: headers.indexOf('LOTE'),
-      FECHA_DE_ENTREGA: headers.indexOf('FECHA_DE_ENTREGA'),
-      ESTADO_TICKET: headers.indexOf('ESTADO_TICKET'),
-      ESTADO_SUELA: headers.indexOf('ESTADO_SUELA'),
-      HORMA: headers.indexOf('HORMA'),
-      HEEL: headers.indexOf('HEEL'),
-      PLANT_ARMADO: headers.indexOf('PLANT_ARMADO'),
-      CLIENTE: headers.indexOf('CLIENTE'),
-      T34: headers.indexOf('T34'),
-      T35: headers.indexOf('T35'),
-      T36: headers.indexOf('T36'),
-      T37: headers.indexOf('T37'),
-      T38: headers.indexOf('T38'),
-      T39: headers.indexOf('T39'),
-      T40: headers.indexOf('T40'),
-      T41: headers.indexOf('T41'),
-      T42: headers.indexOf('T42'),
-      T43: headers.indexOf('T43'),
-      PARES: headers.indexOf('PARES')
-    };
+    // Calcular límite: hace 30 días desde hoy (sin hora)
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    const hace30Dias = new Date(hoy);
+    hace30Dias.setDate(hoy.getDate() - 30);
 
     // Leer datos desde la FILA 3 en adelante
     const tickets = [];
@@ -107,43 +89,40 @@ class SharePointService {
       // Saltar filas 1 y 2 (título y encabezados)
       if (rowNumber <= 2) return;
 
-      const rowData = [];
-      row.eachCell((cell, colNumber) => {
-        rowData[colNumber - 1] = cell.value;
+      // Construir objeto con TODAS las columnas
+      const record = {};
+      headers.forEach((header, idx) => {
+        if (!header) return;
+        const cell = row.getCell(idx + 1);
+        let value = cell.value;
+
+        // Extraer resultado si la celda contiene una fórmula
+        if (value !== null && typeof value === 'object' && !(value instanceof Date) && value.result !== undefined) {
+          value = value.result;
+        }
+
+        record[header] = value ?? null;
       });
 
       // Verificar que la fila tenga datos (al menos un TICKET)
-      if (!rowData[columnIndexes.TICKET]) return;
+      if (!record['TICKET']) return;
 
-      const ticket = {
-        TICKET: parseInt(rowData[columnIndexes.TICKET]) || 0,
-        Referencia: rowData[columnIndexes.Referencia] || '',
-        Material: rowData[columnIndexes.Material] || '',
-        Color: rowData[columnIndexes.Color] || '',
-        LOTE: parseInt(rowData[columnIndexes.LOTE]) || 0,
-        FECHA_DE_ENTREGA: rowData[columnIndexes.FECHA_DE_ENTREGA] || null,
-        ESTADO_TICKET: rowData[columnIndexes.ESTADO_TICKET] || '',
-        ESTADO_SUELA: rowData[columnIndexes.ESTADO_SUELA] || '',
-        HORMA: rowData[columnIndexes.HORMA] || '',
-        TACON: rowData[columnIndexes.HEEL] || '',
-        PLANT_ARMADO: rowData[columnIndexes.PLANT_ARMADO] || '',
-        CLIENTE: rowData[columnIndexes.CLIENTE] || '',
-        tallas: {
-          T34: parseInt(rowData[columnIndexes.T34]) || 0,
-          T35: parseInt(rowData[columnIndexes.T35]) || 0,
-          T36: parseInt(rowData[columnIndexes.T36]) || 0,
-          T37: parseInt(rowData[columnIndexes.T37]) || 0,
-          T38: parseInt(rowData[columnIndexes.T38]) || 0,
-          T39: parseInt(rowData[columnIndexes.T39]) || 0,
-          T40: parseInt(rowData[columnIndexes.T40]) || 0,
-          T41: parseInt(rowData[columnIndexes.T41]) || 0,
-          T42: parseInt(rowData[columnIndexes.T42]) || 0,
-          T43: parseInt(rowData[columnIndexes.T43]) || 0
-        },
-        PARES: parseInt(rowData[columnIndexes.PARES]) || 0
-      };
+      // --- Filtro por FECHA RECIBIDO FINIZAJE ---
+      const fechaRaw = record[FECHA_FINIZAJE_COL];
+      const estaVacia = fechaRaw === null || fechaRaw === undefined || fechaRaw === '';
 
-      tickets.push(ticket);
+      if (!estaVacia) {
+        let fecha = fechaRaw instanceof Date ? new Date(fechaRaw) : new Date(fechaRaw);
+
+        if (!isNaN(fecha.getTime())) {
+          fecha.setHours(0, 0, 0, 0);
+          // Excluir si la fecha es más antigua que 30 días
+          if (fecha < hace30Dias) return;
+        }
+      }
+      // Si está vacía se incluye siempre
+
+      tickets.push(record);
     });
 
     return tickets;
